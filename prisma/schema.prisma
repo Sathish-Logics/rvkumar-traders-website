@@ -1,0 +1,361 @@
+// Defines Prisma-managed public business models; Supabase owns auth and storage schemas.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AppRole {
+  OWNER      @map("owner")
+  MANAGER    @map("manager")
+  SALES      @map("sales")
+  OPERATIONS @map("operations")
+  ACCOUNTS   @map("accounts")
+
+  @@map("app_role")
+}
+
+enum EnquiryStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  QUOTATION_SENT
+  NEGOTIATION
+  WON
+  LOST
+}
+
+enum EnquiryActivityType {
+  CREATED
+  NOTE
+  FOLLOW_UP_SET
+  STATUS_CHANGED
+}
+
+enum QuotationStatus {
+  DRAFT
+  ISSUED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+  SUPERSEDED
+}
+
+enum OrderStatus {
+  CONFIRMED
+  PREPARING
+  DISPATCHED
+  DELIVERED
+  COMPLETED
+  CANCELLED
+}
+
+enum DeliveryStatus {
+  SCHEDULED
+  PREPARING
+  DISPATCHED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  FAILED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  UPI
+  CHEQUE
+  OTHER
+}
+
+enum PaymentStatus {
+  RECORDED
+  REVERSED
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model AdminProfile {
+  id                String            @id @db.Uuid
+  displayName       String            @map("display_name")
+  role              AppRole           @default(OWNER)
+  isActive          Boolean           @default(true) @map("is_active")
+  lastSeenAt        DateTime?         @map("last_seen_at") @db.Timestamptz(6)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+  auditEvents       AuditEvent[]
+  enquiryActivities EnquiryActivity[]
+  quotations        Quotation[]
+  payments          Payment[]
+
+  @@map("admin_profiles")
+}
+
+model Customer {
+  id         String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  phone      String      @unique
+  email      String?
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+  enquiries  Enquiry[]
+  quotations Quotation[]
+  orders     Order[]
+
+  @@index([name])
+  @@map("customers")
+}
+
+model AuditEvent {
+  id         String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  occurredAt DateTime      @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actorType  String        @map("actor_type")
+  actorId    String?       @map("actor_id") @db.Uuid
+  action     String
+  entityType String        @map("entity_type")
+  entityId   String?       @map("entity_id") @db.Uuid
+  beforeData Json?         @map("before_data")
+  afterData  Json?         @map("after_data")
+  reason     String?
+  requestId  String?       @map("request_id") @db.Uuid
+  metadata   Json          @default("{}")
+  actor      AdminProfile? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, occurredAt(sort: Desc)], map: "audit_events_entity_history_idx")
+  @@index([actorId, occurredAt(sort: Desc)], map: "audit_events_actor_history_idx")
+  @@map("audit_events")
+}
+
+model Product {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug           String          @unique
+  name           String
+  brand          String?
+  description    String
+  unit           String
+  imageUrl       String          @map("image_url")
+  isPublished    Boolean         @default(true) @map("is_published")
+  isAvailable    Boolean         @default(true) @map("is_available")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  enquiryItems   EnquiryItem[]
+  quotationItems QuotationItem[]
+
+  @@map("products")
+}
+
+model Enquiry {
+  id            String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference     String            @unique
+  customerName  String            @map("customer_name")
+  phone         String
+  email         String?
+  location      String
+  pinCode       String            @map("pin_code")
+  preferredDate DateTime?         @map("preferred_date") @db.Date
+  instructions  String?
+  status        EnquiryStatus     @default(NEW)
+  customerId    String            @map("customer_id") @db.Uuid
+  followUpAt    DateTime?         @map("follow_up_at") @db.Timestamptz(6)
+  leadSource    String            @default("website") @map("lead_source")
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime          @default(now()) @map("updated_at") @db.Timestamptz(6)
+  items         EnquiryItem[]
+  customer      Customer          @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  activities    EnquiryActivity[]
+  quotations    Quotation[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@index([followUpAt])
+  @@map("enquiries")
+}
+
+model Quotation {
+  id                   String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference            String          @unique
+  enquiryId            String          @map("enquiry_id") @db.Uuid
+  customerId           String          @map("customer_id") @db.Uuid
+  version              Int             @default(1)
+  status               QuotationStatus @default(DRAFT)
+  transportationCharge Decimal         @default(0) @map("transportation_charge") @db.Decimal(14, 2)
+  discountAmount       Decimal         @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  subtotal             Decimal         @default(0) @db.Decimal(14, 2)
+  taxTotal             Decimal         @default(0) @map("tax_total") @db.Decimal(14, 2)
+  grandTotal           Decimal         @default(0) @map("grand_total") @db.Decimal(14, 2)
+  validUntil           DateTime?       @map("valid_until") @db.Date
+  paymentTerms         String?         @map("payment_terms")
+  deliveryTerms        String?         @map("delivery_terms")
+  notes                String?
+  issuedAt             DateTime?       @map("issued_at") @db.Timestamptz(6)
+  acceptedAt           DateTime?       @map("accepted_at") @db.Timestamptz(6)
+  createdById          String          @map("created_by_id") @db.Uuid
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  enquiry              Enquiry         @relation(fields: [enquiryId], references: [id], onDelete: Restrict)
+  customer             Customer        @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  createdBy            AdminProfile    @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  items                QuotationItem[]
+  order                Order?
+
+  @@unique([enquiryId, version])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("quotations")
+}
+
+model QuotationItem {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  quotationId String    @map("quotation_id") @db.Uuid
+  productId   String?   @map("product_id") @db.Uuid
+  description String
+  quantity    Decimal   @db.Decimal(14, 3)
+  unit        String
+  unitRate    Decimal   @map("unit_rate") @db.Decimal(14, 2)
+  taxRate     Decimal   @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  taxable     Decimal   @db.Decimal(14, 2)
+  taxAmount   Decimal   @map("tax_amount") @db.Decimal(14, 2)
+  lineTotal   Decimal   @map("line_total") @db.Decimal(14, 2)
+  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  product     Product?  @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([quotationId])
+  @@map("quotation_items")
+}
+
+model Order {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference    String      @unique
+  quotationId  String      @unique @map("quotation_id") @db.Uuid
+  customerId   String      @map("customer_id") @db.Uuid
+  status       OrderStatus @default(CONFIRMED)
+  totalAmount  Decimal     @map("total_amount") @db.Decimal(14, 2)
+  address      String
+  pinCode      String      @map("pin_code")
+  cancelledAt  DateTime?   @map("cancelled_at") @db.Timestamptz(6)
+  cancelReason String?     @map("cancel_reason")
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+  quotation    Quotation   @relation(fields: [quotationId], references: [id], onDelete: Restrict)
+  customer     Customer    @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  deliveries   Delivery[]
+  payments     Payment[]
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("orders")
+}
+
+model Delivery {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference     String         @unique
+  orderId       String         @map("order_id") @db.Uuid
+  status        DeliveryStatus @default(SCHEDULED)
+  scheduledDate DateTime       @map("scheduled_date") @db.Date
+  address       String
+  vehicleNumber String?        @map("vehicle_number")
+  driverName    String?        @map("driver_name")
+  driverPhone   String?        @map("driver_phone")
+  notes         String?
+  proofPath     String?        @map("proof_path")
+  deliveredAt   DateTime?      @map("delivered_at") @db.Timestamptz(6)
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([status, scheduledDate])
+  @@index([orderId])
+  @@map("deliveries")
+}
+
+model Payment {
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  reference      String        @unique
+  orderId        String        @map("order_id") @db.Uuid
+  amount         Decimal       @db.Decimal(14, 2)
+  method         PaymentMethod
+  status         PaymentStatus @default(RECORDED)
+  receivedAt     DateTime      @map("received_at") @db.Timestamptz(6)
+  externalRef    String?       @map("external_ref")
+  note           String?
+  recordedById   String        @map("recorded_by_id") @db.Uuid
+  reversedAt     DateTime?     @map("reversed_at") @db.Timestamptz(6)
+  reversalReason String?       @map("reversal_reason")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  order          Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  recordedBy     AdminProfile  @relation(fields: [recordedById], references: [id], onDelete: Restrict)
+
+  @@index([orderId, receivedAt(sort: Desc)])
+  @@map("payments")
+}
+
+model NotificationOutbox {
+  id             String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  channel        NotificationChannel
+  destination    String
+  template       String
+  payload        Json                @default("{}")
+  status         NotificationStatus  @default(PENDING)
+  attempts       Int                 @default(0)
+  nextAttemptAt  DateTime            @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  providerId     String?             @map("provider_id")
+  lastError      String?             @map("last_error")
+  idempotencyKey String              @unique @map("idempotency_key")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  sentAt         DateTime?           @map("sent_at") @db.Timestamptz(6)
+
+  @@index([status, nextAttemptAt])
+  @@map("notification_outbox")
+}
+
+model EnquirySubmissionAttempt {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fingerprint String
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@index([fingerprint, createdAt(sort: Desc)])
+  @@map("enquiry_submission_attempts")
+}
+
+model EnquiryActivity {
+  id        String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  enquiryId String              @map("enquiry_id") @db.Uuid
+  actorId   String?             @map("actor_id") @db.Uuid
+  type      EnquiryActivityType
+  note      String?
+  metadata  Json                @default("{}")
+  createdAt DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  enquiry   Enquiry             @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  actor     AdminProfile?       @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([enquiryId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("enquiry_activities")
+}
+
+model EnquiryItem {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  enquiryId   String  @map("enquiry_id") @db.Uuid
+  productId   String  @map("product_id") @db.Uuid
+  productName String  @map("product_name")
+  quantity    Decimal @db.Decimal(14, 3)
+  unit        String
+  enquiry     Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  product     Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([enquiryId])
+  @@index([productId])
+  @@map("enquiry_items")
+}
